@@ -6,10 +6,10 @@
 # Purpose:
 #   Tears down everything apply.sh deployed, in reverse order.
 #
-#   MicroVMs are not owned by Terraform -- the worker launches them on demand --
-#   so every sandbox launched from the image is terminated first. The image
-#   cannot be deleted while sessions launched from it are still alive, and a
-#   forgotten sandbox would bill until its 8-hour lifetime runs out.
+#   Code Interpreter sessions are not Terraform resources -- the agent starts
+#   them on demand -- so any still running are stopped first; otherwise they
+#   would keep their 8-hour TTL (and may block deleting the interpreter).
+#   Runtime sessions need no cleanup: deleting the runtime ends them.
 #
 # ================================================================================
 
@@ -21,59 +21,42 @@ source "$(dirname "$0")/bedrock-config.sh"
 set -euo pipefail
 cd "$(dirname "$0")"
 
-# ================================================================================
-# TERMINATE SANDBOXES
-# ================================================================================
-# Inventory the service rather than DynamoDB, so orphans left by a failed
-# worker call are found too.
-# ================================================================================
-
-IMAGE_ARN=""
-IMAGE_VERSION="1"
-BASE_IMAGE_VERSION="1"
-if [[ -f 01-sandbox/terraform.tfstate ]]; then
-  IMAGE_ARN=$(terraform -chdir=01-sandbox output -raw image_arn 2>/dev/null || true)
-  IMAGE_VERSION=$(terraform -chdir=01-sandbox output -raw image_version 2>/dev/null || echo 1)
-  BASE_IMAGE_VERSION=$(terraform -chdir=01-sandbox output -raw base_image_version 2>/dev/null || echo 1)
+CI_ID="" CI_ARN="unused" MEMORY_ID="unused" MEMORY_ARN="unused"
+if [[ -f 01-agentcore/terraform.tfstate ]]; then
+  CI_ID=$(terraform -chdir=01-agentcore output -raw code_interpreter_id 2>/dev/null || true)
+  CI_ARN=$(terraform -chdir=01-agentcore output -raw code_interpreter_arn 2>/dev/null || echo unused)
+  MEMORY_ID=$(terraform -chdir=01-agentcore output -raw memory_id 2>/dev/null || echo unused)
+  MEMORY_ARN=$(terraform -chdir=01-agentcore output -raw memory_arn 2>/dev/null || echo unused)
 fi
 
-if [[ -n "${IMAGE_ARN}" ]]; then
-  echo "NOTE: Terminating sandboxes launched from ${IMAGE_ARN##*:}..."
-  VM_IDS=$(aws lambda-microvms list-microvms --image-identifier "${IMAGE_ARN}" \
-    --query "items[?state!='TERMINATED'].microvmId" --output text)
+# ================================================================================
+# STOP CODE INTERPRETER SESSIONS
+# ================================================================================
 
-  for vm_id in ${VM_IDS}; do
-    echo "NOTE: Terminating ${vm_id}..."
-    aws lambda-microvms terminate-microvm --microvm-identifier "${vm_id}" >/dev/null || true
+if [[ -n "${CI_ID}" ]]; then
+  echo "NOTE: Stopping Code Interpreter sessions on ${CI_ID}..."
+  SESSIONS=$(aws bedrock-agentcore list-code-interpreter-sessions \
+    --code-interpreter-identifier "${CI_ID}" --status READY \
+    --query "items[].sessionId" --output text 2>/dev/null || true)
+  for session in ${SESSIONS}; do
+    [[ "${session}" == "None" ]] && continue
+    echo "NOTE: Stopping ${session}..."
+    aws bedrock-agentcore stop-code-interpreter-session \
+      --code-interpreter-identifier "${CI_ID}" --session-id "${session}" >/dev/null || true
   done
-
-  # The image delete fails while any session is still TERMINATING.
-  for vm_id in ${VM_IDS}; do
-    for ((attempt = 1; attempt <= 60; attempt++)); do
-      state=$(aws lambda-microvms get-microvm --microvm-identifier "${vm_id}" \
-        --query "state" --output text 2>/dev/null || echo TERMINATED)
-      [[ "${state}" == "TERMINATED" ]] && break
-      sleep 2
-    done
-    [[ "${state}" == "TERMINATED" ]] || {
-      echo "ERROR: ${vm_id} is ${state}; retry destroy after termination completes."
-      exit 1
-    }
-  done
-  echo "NOTE: All sandboxes terminated."
 fi
 
 # ================================================================================
 # RESTORE BUILD ARTIFACTS THE CONFIGURATION REFERENCES
 # ================================================================================
-# Terraform evaluates the whole configuration before destroying anything, and
-# both phases hash files under dist/. Only existence matters for a destroy, so
-# rebuild cheaply rather than requiring a full apply-time package.
+# 02-core hashes dist/agent.zip and dist/boto3-layer.zip. Only existence
+# matters for a destroy, so empty placeholders are enough.
 # ================================================================================
 
 mkdir -p dist
-if [[ ! -f dist/sandbox-image.zip ]]; then
-  (cd 01-sandbox/image && zip -q -X -r ../../dist/sandbox-image.zip . -x '*__pycache__*')
+if [[ ! -f dist/agent.zip ]]; then
+  mkdir -p dist/agent && touch dist/agent/placeholder
+  (cd dist/agent && zip -q -X -r ../agent.zip .)
 fi
 if [[ ! -f dist/boto3-layer.zip ]]; then
   mkdir -p dist/layer/python
@@ -92,19 +75,20 @@ if [[ -f 02-core/terraform.tfstate ]]; then
   terraform -chdir=02-core init -input=false
   terraform -chdir=02-core destroy -auto-approve -input=false \
     -var="bedrock_model_id=${BEDROCK_MODEL_ID}" \
-    -var="sandbox_image_arn=${IMAGE_ARN:-arn:aws:lambda:${AWS_DEFAULT_REGION}:000000000000:microvm-image:unused}" \
-    -var="sandbox_image_version=${IMAGE_VERSION}" \
+    -var="code_interpreter_id=${CI_ID:-unused}" \
+    -var="code_interpreter_arn=${CI_ARN}" \
+    -var="memory_id=${MEMORY_ID}" \
+    -var="memory_arn=${MEMORY_ARN}" \
     -var="google_client_id=${AWS_AGENTOPS_GOOGLE_CLIENT_ID:-}" \
     -var="google_client_secret=${AWS_AGENTOPS_GOOGLE_CLIENT_SECRET:-}" \
     -var="custom_domain=${AWS_AGENTOPS_CUSTOM_DOMAIN:-}"
 fi
 
-if [[ -f 01-sandbox/terraform.tfstate ]]; then
-  echo "NOTE: Destroying 01-sandbox..."
-  terraform -chdir=01-sandbox init -input=false
-  terraform -chdir=01-sandbox destroy -auto-approve -input=false \
-    -var="region=${AWS_DEFAULT_REGION}" \
-    -var="base_image_version=${BASE_IMAGE_VERSION}"
+if [[ -f 01-agentcore/terraform.tfstate ]]; then
+  echo "NOTE: Destroying 01-agentcore..."
+  terraform -chdir=01-agentcore init -input=false
+  terraform -chdir=01-agentcore destroy -auto-approve -input=false \
+    -var="region=${AWS_DEFAULT_REGION}"
 fi
 
 echo "NOTE: Infrastructure teardown complete."

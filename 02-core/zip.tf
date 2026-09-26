@@ -1,9 +1,9 @@
 # --------------------------------------------------------------------------------
 # DATA: archive_file.lambdas_zip
 #
-# Packages all Lambda source from code/ into one ZIP. The API Lambda and the SQS
-# worker share this archive; each points at its own handler. boto3 is not in
-# here -- it comes from the layer in lambdas.tf.
+# Packages the API Lambda's source from code/. boto3 is not in here -- it
+# comes from the layer in lambdas.tf. The agent (agent/) is packaged
+# separately by apply.sh, with ARM64 wheels, for AgentCore Runtime.
 # --------------------------------------------------------------------------------
 data "archive_file" "lambdas_zip" {
   type        = "zip"

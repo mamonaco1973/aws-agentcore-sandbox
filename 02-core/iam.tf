@@ -1,5 +1,6 @@
 # ================================================================================
-# Lambda execution role
+# API Lambda execution role
+# (The agent runs as its own role, in agent.tf.)
 # ================================================================================
 
 resource "aws_iam_role" "lambda_exec" {
@@ -88,113 +89,39 @@ resource "aws_iam_role_policy_attachment" "lambda_s3_attach" {
 }
 
 # ================================================================================
-# SQS access
+# AgentCore access — the API starts messages on the agent and, on delete,
+# stops the conversation's Runtime and Code Interpreter sessions. It never
+# calls the model or the sandbox itself: that is the agent's job.
 # ================================================================================
 
-resource "aws_iam_policy" "lambda_sqs" {
-  name = "agent-app-sqs-${random_id.bucket_suffix.hex}"
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Sid    = "QueryQueueAccess"
-      Effect = "Allow"
-      Action = [
-        "sqs:GetQueueAttributes",
-        "sqs:GetQueueUrl",
-        "sqs:SendMessage",
-        "sqs:ReceiveMessage",
-        "sqs:DeleteMessage",
-        "sqs:ChangeMessageVisibility"
-      ]
-      Resource = [
-        aws_sqs_queue.query_requests.arn,
-        aws_sqs_queue.query_requests_dlq.arn
-      ]
-    }]
-  })
-}
-
-resource "aws_iam_role_policy_attachment" "lambda_sqs_attach" {
-  role       = aws_iam_role.lambda_exec.name
-  policy_arn = aws_iam_policy.lambda_sqs.arn
-}
-
-# ================================================================================
-# Bedrock access — the worker calls the model directly through Converse, which
-# is authorized as bedrock:InvokeModel. A cross-region inference profile needs
-# the grant on the profile AND on the foundation model in every region the
-# profile may route to, hence the wildcard region on the model ARN.
-# ================================================================================
-
-resource "aws_iam_policy" "lambda_bedrock" {
-  name = "agent-bedrock-${random_id.bucket_suffix.hex}"
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Sid    = "InvokeModel"
-      Effect = "Allow"
-      Action = ["bedrock:InvokeModel"]
-      Resource = [
-        "arn:aws:bedrock:*:${data.aws_caller_identity.current.account_id}:inference-profile/${var.bedrock_model_id}",
-        "arn:aws:bedrock:*::foundation-model/*",
-      ]
-    }]
-  })
-}
-
-resource "aws_iam_role_policy_attachment" "lambda_bedrock_attach" {
-  role       = aws_iam_role.lambda_exec.name
-  policy_arn = aws_iam_policy.lambda_bedrock.arn
-}
-
-# ================================================================================
-# MicroVM access — launch, reach, and terminate sandboxes from this image only
-# ================================================================================
-
-resource "aws_iam_policy" "lambda_microvms" {
-  name = "agent-microvms-${random_id.bucket_suffix.hex}"
+resource "aws_iam_policy" "lambda_agentcore" {
+  name = "agent-agentcore-${random_id.bucket_suffix.hex}"
 
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
       {
-        Sid    = "SandboxLifecycle"
+        Sid    = "InvokeAgent"
         Effect = "Allow"
-        Action = [
-          "lambda:RunMicrovm",
-          "lambda:GetMicrovm",
-          "lambda:TerminateMicrovm",
-          "lambda:CreateMicrovmAuthToken",
-        ]
-        Resource = var.sandbox_image_arn
-      },
-      # Required to launch with an execution role, and absent from the
-      # least-privilege example in the MicroVMs documentation. Deliberately
-      # NO iam:PassedToService condition: the service does not populate that
-      # key, so the condition never matches and the grant silently grants
-      # nothing -- both found the hard way in aws-lambda-microvms.
-      {
-        Sid      = "PassSandboxRole"
-        Effect   = "Allow"
-        Action   = ["iam:PassRole"]
-        Resource = aws_iam_role.sandbox.arn
-      },
-      {
-        Sid    = "SandboxNetworking"
-        Effect = "Allow"
-        Action = ["lambda:PassNetworkConnector"]
+        Action = ["bedrock-agentcore:InvokeAgentRuntime", "bedrock-agentcore:StopRuntimeSession"]
+        # The runtime and its endpoints (the DEFAULT endpoint is what an
+        # unqualified InvokeAgentRuntime resolves to).
         Resource = [
-          "arn:aws:lambda:${var.region}:aws:network-connector:aws-network-connector:INTERNET_EGRESS",
-          "arn:aws:lambda:${var.region}:aws:network-connector:aws-network-connector:ALL_INGRESS",
+          aws_bedrockagentcore_agent_runtime.agent.agent_runtime_arn,
+          "${aws_bedrockagentcore_agent_runtime.agent.agent_runtime_arn}/*",
         ]
+      },
+      {
+        Sid      = "StopSandbox"
+        Effect   = "Allow"
+        Action   = ["bedrock-agentcore:StopCodeInterpreterSession"]
+        Resource = var.code_interpreter_arn
       },
     ]
   })
 }
 
-resource "aws_iam_role_policy_attachment" "lambda_microvms_attach" {
+resource "aws_iam_role_policy_attachment" "lambda_agentcore_attach" {
   role       = aws_iam_role.lambda_exec.name
-  policy_arn = aws_iam_policy.lambda_microvms.arn
+  policy_arn = aws_iam_policy.lambda_agentcore.arn
 }

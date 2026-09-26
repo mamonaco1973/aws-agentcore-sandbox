@@ -104,7 +104,7 @@ function appendThinkingMessage(queryId) {
   dots.innerHTML = "<span></span><span></span><span></span>";
 
   // Live progress, filled from the partial trace while the worker runs:
-  // "Launched MicroVM…", "running code…". Empty until the first step lands.
+  // "Started Code Interpreter session…", "running code…". Empty until the first step lands.
   const status = document.createElement("div");
   status.className = "thinking-status";
 

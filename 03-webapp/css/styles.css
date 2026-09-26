@@ -23,7 +23,7 @@
   --ring-danger:   #b33434;
 
   --radius:        8px;
-  --sidebar-width: 280px;   /* room for "MicroVM Agent Sandbox" in the brand row */
+  --sidebar-width: 280px;   /* room for the product name in the brand row */
   --input-max:     860px;
 }
 

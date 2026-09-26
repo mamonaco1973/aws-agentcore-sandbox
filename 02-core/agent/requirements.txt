@@ -1,0 +1,5 @@
+# Pinned: the Strands repo has moved (strands-agents/harness-sdk) and both
+# packages release often. Wheels are fetched for ARM64 by apply.sh.
+strands-agents==1.57.1
+bedrock-agentcore==1.23.1
+boto3>=1.43.0

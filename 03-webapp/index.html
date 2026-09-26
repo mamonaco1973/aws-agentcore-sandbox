@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>MicroVM Agent Sandbox</title>
+  <title>AgentCore Sandbox</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <!-- Inter webfont — matches ChatGPT's UI typeface -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -48,7 +48,7 @@
               <path d="M12 11.5v10"/>
             </svg>
           </span>
-          <span class="sidebar-brand-name">MicroVM Agent Sandbox</span>
+          <span class="sidebar-brand-name">AgentCore Sandbox</span>
         </div>
         <button id="btn-sidebar-collapse" class="sidebar-icon-btn" title="Close sidebar">
           <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18"
@@ -112,7 +112,7 @@
           </svg>
           Open LinkedIn
         </a>
-        <a href="https://github.com/mamonaco1973/aws-microvm-agent-sandbox" target="_blank" rel="noopener"
+        <a href="https://github.com/mamonaco1973/aws-agentcore-sandbox" target="_blank" rel="noopener"
            class="sidebar-link-btn sidebar-link-btn--build" title="Build this application">
           <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"
                viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -181,17 +181,17 @@
               </svg>
             </button>
             <div id="help-submenu" class="user-menu-submenu hidden">
-              <a href="https://github.com/mamonaco1973/aws-microvm-agent-sandbox#readme"
+              <a href="https://github.com/mamonaco1973/aws-agentcore-sandbox#readme"
                  target="_blank" rel="noopener noreferrer" class="user-menu-subitem">
                 How it works
               </a>
-              <a href="https://github.com/mamonaco1973/aws-microvm-agent-sandbox#try-it"
+              <a href="https://github.com/mamonaco1973/aws-agentcore-sandbox#try-it"
                  target="_blank" rel="noopener noreferrer" class="user-menu-subitem">
                 Things to try
               </a>
-              <a href="https://github.com/mamonaco1973/aws-lambda-microvms"
+              <a href="https://github.com/mamonaco1973/aws-microvm-agent-sandbox"
                  target="_blank" rel="noopener noreferrer" class="user-menu-subitem">
-                Lambda MicroVMs project
+                MicroVM version (compare)
               </a>
             </div>
             <button id="user-menu-settings" class="user-menu-item">
@@ -287,7 +287,7 @@
             <line x1="3" y1="18" x2="21" y2="18"/>
           </svg>
         </button>
-        <span id="mobile-topbar-title">MicroVM Agent Sandbox</span>
+        <span id="mobile-topbar-title">AgentCore Sandbox</span>
       </div>
 
       <!-- Boot spinner — shown while conversations and usage load, so the empty
@@ -299,9 +299,9 @@
       <!-- Empty state — shown when no conversation is selected. Starts hidden;
            boot() reveals it once the workspace has loaded. -->
       <div id="empty-state" class="hidden">
-        <div class="empty-logo">MicroVM Agent Sandbox</div>
+        <div class="empty-logo">AgentCore Sandbox</div>
         <p class="empty-tagline">
-          A coding agent with its own Lambda MicroVM. It writes Python, runs it in a private sandbox, looks at what it drew, and hands you the result — expand the trace to watch it work.
+          A coding agent built on Amazon Bedrock AgentCore. It writes Python, runs it in a Code Interpreter sandbox, looks at what it drew, and hands you the result — expand the trace to watch it work.
         </p>
         <div class="starter-grid">
           <button class="starter-btn" data-q="Build me a fractal tree and get me the results">Build me a fractal tree</button>
@@ -323,7 +323,7 @@
         <div id="input-wrapper">
           <textarea
             id="chat-input"
-            placeholder="Ask it to build, compute, or draw something — it runs the code in its own MicroVM…"
+            placeholder="Ask it to build, compute, or draw something — it runs the code in an AgentCore Code Interpreter…"
             rows="1"
             maxlength="4000"
           ></textarea>
@@ -352,9 +352,9 @@
 
       <div class="auth-preview-panel">
         <div class="auth-preview-inner">
-          <div class="auth-preview-logo">MicroVM Agent Sandbox</div>
+          <div class="auth-preview-logo">AgentCore Sandbox</div>
           <p class="auth-preview-tagline">
-            A coding agent with its own Lambda MicroVM.
+            A coding agent built on Amazon Bedrock AgentCore.
           </p>
           <ul class="auth-preview-features">
             <li>
@@ -363,7 +363,7 @@
                    stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                 <polyline points="20 6 9 17 4 12"/>
               </svg>
-              Writes and runs Python in a private Firecracker VM
+              Writes and runs Python in a Code Interpreter sandbox
             </li>
             <li>
               <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14"
@@ -394,10 +394,10 @@
       </div>
 
       <div class="auth-form-panel">
-        <h2>MicroVM Agent Sandbox</h2>
+        <h2>AgentCore Sandbox</h2>
         <p class="auth-form-desc">
           Sign in to chat with a coding agent. Each conversation gets its own
-          Lambda MicroVM, launched the first time the agent needs to run code.
+          Code Interpreter session, started the first time the agent needs to run code.
         </p>
         <div class="auth-form-actions">
           <button type="button" id="btn-cognito-sign-in">Sign In</button>

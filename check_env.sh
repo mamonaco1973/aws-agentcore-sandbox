@@ -2,7 +2,7 @@
 # ==============================================================================
 # check_env.sh
 # ==============================================================================
-# Validates local tooling, AWS credentials, MicroVM CLI support, and Bedrock
+# Validates local tooling, AWS credentials, AgentCore CLI support, and Bedrock
 # model access before apply.sh or destroy.sh are allowed to proceed.
 # ==============================================================================
 
@@ -45,13 +45,13 @@ if ! aws sts get-caller-identity --query "Account" --output text > /dev/null 2>&
 fi
 echo "NOTE: Successfully logged into AWS."
 
-# The MicroVM APIs ship in recent CLI v2 builds only; fail early with a clear
-# message instead of an opaque "Invalid choice" halfway through apply.
-if ! aws lambda-microvms help > /dev/null 2>&1; then
-  echo "ERROR: This AWS CLI does not support 'lambda-microvms'. Upgrade to the latest AWS CLI v2."
+# AgentCore APIs ship in recent CLI v2 builds only; destroy.sh uses them to
+# stop sandbox sessions, and validate.sh to check the runtime.
+if ! aws bedrock-agentcore-control help > /dev/null 2>&1 || ! aws bedrock-agentcore help > /dev/null 2>&1; then
+  echo "ERROR: This AWS CLI does not support AgentCore. Upgrade to the latest AWS CLI v2."
   exit 1
 fi
-echo "NOTE: AWS CLI supports the lambda-microvms service."
+echo "NOTE: AWS CLI supports the AgentCore services."
 
 # Bedrock model ID is set by apply.sh (single source of truth). The fallback
 # here only applies if check_env.sh is run standalone.

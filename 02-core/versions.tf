@@ -2,8 +2,8 @@
 # Provider constraints
 #
 # Pin a floor rather than an exact version so `terraform init` still tracks
-# patch/minor updates. The MicroVM image itself is built in 01-sandbox; nothing
-# here needs a MicroVM-aware provider, only the SDK the Lambdas vendor.
+# patch/minor updates. 6.46 is the floor for aws_bedrockagentcore_agent_runtime
+# with code_configuration (direct code deploy, 6.22+) and the current schema.
 # ================================================================================
 
 terraform {
@@ -12,7 +12,7 @@ terraform {
   required_providers {
     aws = {
       source  = "hashicorp/aws"
-      version = ">= 5.70"
+      version = ">= 6.46"
     }
     archive = {
       source  = "hashicorp/archive"

@@ -29,26 +29,36 @@ variable "region" {
 }
 
 # ================================================================================
-# Model — the Bedrock inference profile the worker's Converse loop calls. It
+# Model — the Bedrock inference profile the agent (Strands) calls. It
 # must support tool use and image input. Set in bedrock-config.sh.
 # ================================================================================
 
 variable "bedrock_model_id" {
-  description = "Bedrock model or inference-profile id for the Converse loop"
+  description = "Bedrock model or inference-profile id the agent uses"
   type        = string
 }
 
 # ================================================================================
-# Sandbox image — built by 01-sandbox and passed in by apply.sh
+# AgentCore resources — created by 01-agentcore and passed in by apply.sh
 # ================================================================================
 
-variable "sandbox_image_arn" {
-  description = "ARN of the MicroVM image sandboxes launch from"
+variable "code_interpreter_id" {
+  description = "Custom (PUBLIC network) Code Interpreter the agent's sandboxes run on"
   type        = string
 }
 
-variable "sandbox_image_version" {
-  description = "Image version to launch; pinned to the one 01-sandbox just built"
+variable "code_interpreter_arn" {
+  description = "ARN of that Code Interpreter, for IAM"
+  type        = string
+}
+
+variable "memory_id" {
+  description = "AgentCore Memory holding conversation history"
+  type        = string
+}
+
+variable "memory_arn" {
+  description = "ARN of that Memory, for IAM"
   type        = string
 }
 

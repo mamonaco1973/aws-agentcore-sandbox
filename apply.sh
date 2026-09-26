@@ -1,15 +1,16 @@
 #!/bin/bash
 # ================================================================================
 # apply.sh
-# Full deployment of the MicroVM sandbox agent.
+# Full deployment of the AgentCore sandbox agent.
 #
 # Workflow:
-#   1. Validate tooling, AWS credentials, MicroVM CLI support, model access
-#   2. Package the sandbox image source and a boto3 layer for the Lambdas
-#   3. 01-sandbox: build the MicroVM image (Lambda builds it remotely)
-#   4. 02-core:    API, worker, Cognito, SQS, DynamoDB, S3, CloudFront
-#   5. 03-webapp:  generate config.js and upload the SPA
-#   6. validate.sh: smoke-test a sandbox and print the app URL
+#   1. Validate tooling, AWS credentials, AgentCore CLI support, model access
+#   2. Package the agent (ARM64 wheels + agent/*.py) and a boto3 layer
+#   3. 01-agentcore: Code Interpreter (PUBLIC) + Memory
+#   4. 02-core:      agent on AgentCore Runtime, API, Cognito, DynamoDB, S3,
+#                    CloudFront
+#   5. 03-webapp:    generate config.js and upload the SPA
+#   6. validate.sh:  smoke-test a sandbox session and print the app URL
 # ================================================================================
 
 export AWS_DEFAULT_REGION="us-east-1"
@@ -21,7 +22,9 @@ source "$(dirname "$0")/bedrock-config.sh"
 set -euo pipefail
 cd "$(dirname "$0")"
 
-# Must match the runtime in 02-core/lambdas.tf; selects the vendored wheels.
+# The agent's runtime in 02-core/agent.tf and the API Lambda's runtime in
+# lambdas.tf; wheels are selected for these.
+AGENT_PYTHON="3.13"
 LAMBDA_PYTHON="3.13"
 
 # ================================================================================
@@ -34,72 +37,63 @@ echo "NOTE: Running environment validation..."
 # ================================================================================
 # Packaging
 # ================================================================================
+# AgentCore Runtime runs ARM64. Rather than build a container (which would
+# need Docker buildx or CodeBuild), the agent ships as a zip: pip fetches
+# ARM64 wheels for the Runtime's Python regardless of this host's platform.
+# --only-binary makes a package without an ARM64 wheel fail here, loudly,
+# instead of at runtime.
+# ================================================================================
 
-echo "NOTE: Packaging the sandbox image source..."
 rm -rf dist && mkdir -p dist
-(cd 01-sandbox/image && zip -q -X -r ../../dist/sandbox-image.zip . -x '*__pycache__*')
 
-# The Lambda runtime's bundled SDK predates lambda-microvms. These wheels
-# target the Lambda runtime, not this host, so Requires-Python is checked
-# against LAMBDA_PYTHON instead of the local interpreter; every dependency is
-# a pure-Python wheel, so the host's platform does not matter.
-echo "NOTE: Vendoring boto3 into the Lambda layer..."
+echo "NOTE: Packaging the agent for AgentCore Runtime (ARM64)..."
+python3 -m pip install --quiet --disable-pip-version-check --no-compile \
+  --only-binary=:all: --implementation cp --python-version "${AGENT_PYTHON}" \
+  --platform manylinux2014_aarch64 --platform manylinux_2_28_aarch64 \
+  --target dist/agent -r 02-core/agent/requirements.txt
+cp 02-core/agent/*.py dist/agent/
+(cd dist/agent && zip -q -X -r ../agent.zip . -x '*/__pycache__/*')
+echo "NOTE: dist/agent.zip is $(du -h dist/agent.zip | cut -f1)"
+
+# The API Lambda calls InvokeAgentRuntime; the runtime's bundled boto3 may
+# predate that service, so a current one is vendored as a layer.
+echo "NOTE: Vendoring boto3 into the API Lambda layer..."
 python3 -m pip install --quiet --disable-pip-version-check --no-compile \
   --only-binary=:all: --python-version "${LAMBDA_PYTHON}" \
   --ignore-requires-python --no-warn-conflicts \
   --target dist/layer/python "boto3>=1.43.0"
-
-# A too-old boto3 would otherwise ship silently and fail at runtime with
-# "Unknown service: lambda-microvms".
-if [[ ! -d dist/layer/python/botocore/data/lambda-microvms ]]; then
-  echo "ERROR: Vendored boto3 has no lambda-microvms service model."
+if [[ ! -d dist/layer/python/botocore/data/bedrock-agentcore ]]; then
+  echo "ERROR: Vendored boto3 has no bedrock-agentcore service model."
   exit 1
 fi
 (cd dist/layer && zip -q -X -r ../boto3-layer.zip python -x '*/__pycache__/*')
 
 # ================================================================================
-# Select the managed base image
-# ================================================================================
-# BaseImageVersion is required by AWS::Lambda::MicrovmImage and versions age
-# out, so resolve the newest at deploy time rather than pinning one in source.
+# 01-agentcore — Code Interpreter + Memory
 # ================================================================================
 
-echo "NOTE: Selecting the newest managed MicroVM base image version..."
-BASE_IMAGE_ARN="arn:aws:lambda:${AWS_DEFAULT_REGION}:aws:microvm-image:al2023-1"
-BASE_IMAGE_VERSION=$(aws lambda-microvms list-managed-microvm-image-versions \
-  --image-identifier "${BASE_IMAGE_ARN}" \
-  --query "sort_by(items, &createdAt)[-1].imageVersion" --output text)
+echo "NOTE: Creating the Code Interpreter and Memory (Memory takes a few minutes)..."
+terraform -chdir=01-agentcore init -input=false
+terraform -chdir=01-agentcore apply -auto-approve -input=false \
+  -var="region=${AWS_DEFAULT_REGION}"
 
-if [[ -z "${BASE_IMAGE_VERSION}" || "${BASE_IMAGE_VERSION}" == "None" ]]; then
-  echo "ERROR: No managed base image version found for ${BASE_IMAGE_ARN}."
-  exit 1
-fi
-echo "NOTE: Using base image version ${BASE_IMAGE_VERSION}"
+CI_ID=$(terraform -chdir=01-agentcore output -raw code_interpreter_id)
+CI_ARN=$(terraform -chdir=01-agentcore output -raw code_interpreter_arn)
+MEMORY_ID=$(terraform -chdir=01-agentcore output -raw memory_id)
+MEMORY_ARN=$(terraform -chdir=01-agentcore output -raw memory_arn)
 
 # ================================================================================
-# 01-sandbox — build the MicroVM image
+# 02-core — agent runtime and backend
 # ================================================================================
 
-echo "NOTE: Building the sandbox MicroVM image (this takes several minutes)..."
-terraform -chdir=01-sandbox init -input=false
-terraform -chdir=01-sandbox apply -auto-approve -input=false \
-  -var="region=${AWS_DEFAULT_REGION}" \
-  -var="base_image_version=${BASE_IMAGE_VERSION}"
-
-IMAGE_ARN=$(terraform -chdir=01-sandbox output -raw image_arn)
-IMAGE_VERSION=$(terraform -chdir=01-sandbox output -raw image_version)
-echo "NOTE: Sandbox image ${IMAGE_ARN##*:} version ${IMAGE_VERSION}"
-
-# ================================================================================
-# 02-core — backend
-# ================================================================================
-
-echo "NOTE: Deploying backend (API, worker, auth, storage)..."
+echo "NOTE: Deploying the agent runtime and backend..."
 terraform -chdir=02-core init -input=false
 terraform -chdir=02-core apply -auto-approve -input=false \
   -var="bedrock_model_id=${BEDROCK_MODEL_ID}" \
-  -var="sandbox_image_arn=${IMAGE_ARN}" \
-  -var="sandbox_image_version=${IMAGE_VERSION}" \
+  -var="code_interpreter_id=${CI_ID}" \
+  -var="code_interpreter_arn=${CI_ARN}" \
+  -var="memory_id=${MEMORY_ID}" \
+  -var="memory_arn=${MEMORY_ARN}" \
   -var="google_client_id=${AWS_AGENTOPS_GOOGLE_CLIENT_ID:-}" \
   -var="google_client_secret=${AWS_AGENTOPS_GOOGLE_CLIENT_SECRET:-}" \
   -var="custom_domain=${AWS_AGENTOPS_CUSTOM_DOMAIN:-}"
@@ -115,11 +109,8 @@ CF_DISTRIBUTION_ID=$(terraform -chdir=02-core output -raw cloudfront_distributio
 # ================================================================================
 
 echo "NOTE: Deploying web application..."
-
 envsubst < 03-webapp/js/config.js.tmpl > 03-webapp/js/config.js
 aws s3 cp 03-webapp "s3://${BUCKET_NAME}" --recursive --exclude "*.tmpl"
-
-# Invalidate CloudFront so updated assets are served immediately
 aws cloudfront create-invalidation \
   --distribution-id "${CF_DISTRIBUTION_ID}" \
   --paths "/*" > /dev/null

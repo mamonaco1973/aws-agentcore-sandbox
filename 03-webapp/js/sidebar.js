@@ -163,7 +163,9 @@ function _groupByRecency(convs) {
   ];
 
   for (const conv of convs) {
-    const d = conv.updated_at ? new Date(conv.updated_at) : new Date(0);
+    // Only a chat created moments ago can lack a timestamp, so treat that as
+    // now; the epoch fallback this replaced filed new chats under "Older".
+    const d = new Date(conv.updated_at || conv.created_at || Date.now());
     if (d >= today)        groups[0][1].push(conv);
     else if (d >= yesterday) groups[1][1].push(conv);
     else if (d >= week7)   groups[2][1].push(conv);

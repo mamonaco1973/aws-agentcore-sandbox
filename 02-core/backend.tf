@@ -6,7 +6,7 @@
 # terraform {
 #   backend "s3" {
 #     bucket = "your-terraform-state-bucket"
-#     key    = "terraform/state/aws-microvm-agent-sandbox/terraform.tfstate"
+#     key    = "terraform/state/aws-agentcore-sandbox/terraform.tfstate"
 #     region = "us-east-1"
 #   }
 # }

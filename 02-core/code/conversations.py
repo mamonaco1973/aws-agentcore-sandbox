@@ -6,7 +6,7 @@
 #
 # Key Responsibilities
 # - Create / list / delete conversations
-# - Submit a query (writes question to S3, enqueues SQS message)
+# - Submit a query (writes question to S3, starts it on AgentCore Runtime)
 # - List queries in a conversation (for rebuilding chat history)
 # - Poll a single query for completion status
 #
@@ -20,8 +20,10 @@
 #   users/USER#<id>/conversations/CONV#<conv_id>/QUERY#<query_id>/trace.json
 #   users/USER#<id>/conversations/CONV#<conv_id>/QUERY#<query_id>/files/<n>-<name>
 #
-# A conversation's sandbox MicroVM is recorded on its CONV# item by the worker
-# (see sandbox.py) and terminated here when the conversation is deleted.
+# A conversation's Code Interpreter session is recorded on its CONV# item by
+# the agent (agent/sandbox.py) and stopped here, with its Runtime session, when
+# the conversation is deleted. Its history lives in AgentCore Memory, which
+# expires it on its own schedule (event_expiry_duration in 01-agentcore).
 # ================================================================================
 
 import json
@@ -34,7 +36,7 @@ import boto3
 from boto3.dynamodb.conditions import Key
 from botocore.config import Config
 
-import sandbox
+import runtime
 from users import token_limit
 
 # --------------------------------------------------------------------------------
@@ -42,7 +44,6 @@ from users import token_limit
 # --------------------------------------------------------------------------------
 
 table  = boto3.resource("dynamodb").Table(os.environ["TABLE_NAME"])
-sqs    = boto3.client("sqs")
 s3     = boto3.client("s3")
 
 # SigV4 against the regional endpoint, so presigned file links work in every
@@ -54,7 +55,6 @@ s3_presign = boto3.client(
 )
 
 BACKEND_BUCKET  = os.environ["BACKEND_BUCKET_NAME"]
-QUERY_QUEUE_URL = os.environ["QUERY_QUEUE_URL"]
 
 # File links are re-signed on every poll and history load, so they only need
 # to outlive one page view. A long expiry would be capped anyway by the
@@ -142,7 +142,14 @@ def create_conversation(event):
         "updated_at": now,
     })
 
-    return json_response(200, {"conv_id": conv_id, "title": "New conversation"})
+    # Same shape as a list_conversations entry: the sidebar groups chats by
+    # updated_at, and a new chat without one was filed under "Older".
+    return json_response(200, {
+        "conv_id":    conv_id,
+        "title":      "New conversation",
+        "created_at": now,
+        "updated_at": now,
+    })
 
 
 # --------------------------------------------------------------------------------
@@ -189,12 +196,12 @@ def delete_conversation(event):
 
     pk = f"USER#{user_id}"
 
-    # Terminate first: a conversation record deleted before its MicroVM would
-    # leave the VM running with nothing pointing at it. Not awaited -- the
-    # service finishes termination on its own, and this request is short.
+    # Stop the sessions first: a conversation record deleted before its Code
+    # Interpreter session would leave that session running, and billing, with
+    # nothing pointing at it until its 8-hour TTL.
     conv = table.get_item(Key={"pk": pk, "sk": f"CONV#{conv_id}"}).get("Item")
     if conv:
-        sandbox.release(user_id, conv_id, conv)
+        runtime.release(conv_id, conv)
 
     # Delete all QUERY# records for this conversation
     result = table.query(
@@ -277,15 +284,19 @@ def submit_query(event):
     # Update conversation title from first message and bump updated_at
     _maybe_set_conv_title(user_id, conv_id, question, now)
 
-    # Enqueue worker
-    sqs.send_message(
-        QueueUrl=QUERY_QUEUE_URL,
-        MessageBody=json.dumps({
-            "user_id":  user_id,
-            "conv_id":  conv_id,
-            "query_id": query_id,
-        }),
-    )
+    # Start the agent. Its handler returns once the message is running in the
+    # background; the browser then polls this query record as before.
+    try:
+        runtime.start_query(user_id, conv_id, query_id)
+    except Exception as exc:
+        table.update_item(
+            Key={"pk": f"USER#{user_id}", "sk": f"QUERY#{conv_id}#{query_id}"},
+            UpdateExpression="SET #s = :s, status_message = :m, updated_at = :u",
+            ExpressionAttributeNames={"#s": "status"},
+            ExpressionAttributeValues={":s": "failed", ":m": f"Could not start the agent: {exc}"[:500],
+                                       ":u": utc_now()},
+        )
+        return json_response(502, {"error": "agent_unavailable"})
 
     return json_response(200, {
         "query_id": query_id,
